@@ -12,6 +12,40 @@ If you're new to this: think of what follows as building a tiny (but realistic) 
 
 The goal: after finishing, you should be able to explain (with confidence) how a number scraped from an HTTP endpoint eventually causes new pods to appear.
 
+# Table of Contents
+
+- [Overview](#overview)
+- [Concepts](#concepts)
+  - [TSDB data model](#tsdb-data-model)
+    - [Fundamental Concepts](#fundamental-concepts)
+    - [Point and Series](#point-and-series)
+  - [Prometheus Concepts](#prometheus-concepts)
+    - [Fundamental Concepts from TSDB](#fundamental-concepts-from-tsdb)
+    - [Metric Types](#metric-types)
+      - [Gauge](#gauge)
+      - [Counter](#counter)
+      - [Histogram](#histogram)
+      - [Summary](#summary)
+    - [PromQL](#promql)
+- [Understanding HPA](#understanding-hpa)
+- [Environment Setup](#environment-setup)
+  - [K8s and Ingress](#k8s-and-ingress)
+  - [Compile and build the image](#compile-and-build-the-image)
+- [HPA with Basic Resource Metrics](#hpa-with-basic-resource-metrics)
+  - [Deploy the service](#deploy-the-service)
+  - [Test HPA with basic resource metrics](#test-hpa-with-basic-resource-metrics)
+- [HPA with Custom Metrics](#hpa-with-custom-metrics)
+  - [Install Prometheus](#install-prometheus)
+  - [Collect custom metrics](#collect-custom-metrics)
+  - [Install Prometheus Adapter](#install-prometheus-adapter)
+  - [Test HPA with custom metrics](#test-hpa-with-custom-metrics)
+- [HPA with External Metrics](#hpa-with-external-metrics)
+  - [Deploy a fake monitoring system](#deploy-a-fake-monitoring-system)
+  - [Collect external metrics](#collect-external-metrics)
+  - [Expose external metrics to HPA](#expose-external-metrics-to-hpa)
+  - [Test HPA with external metrics](#test-hpa-with-external-metrics)
+- [Summary](#summary)
+
 # Concepts
 
 Take the time to internalize these concepts; shallow understanding of metrics is a common root cause of failed monitoring systems and weak SLOs.
@@ -247,6 +281,8 @@ We’re intentionally keeping this “kitchen counter lab” minimal so you can 
 - Prometheus Adapter: translator from PromQL world to Kubernetes metric APIs.
 - Sample app + fake exporter: predictable, tweakable signals.
 
+In the following steps, each time you install a new components, please go back to the diagram above to refresh your memory and don't get lost.
+
 ## K8s and Ingress
 We use Docker Desktop on macOS for convenience; a full multi-node cluster is unnecessary.
 The demo is a Spring Boot application using Micrometer to expose metrics via the actuator endpoint `http://localhost:8080/actuator/prometheus`.
@@ -344,8 +380,6 @@ horizontalpodautoscaler.autoscaling/hpa-demo   Deployment/hpa-demo   441%/50%   
 # HPA with Custom Metrics
 
 Now we graduate from “CPU percent” (a proxy) to “business-ish” signals. Custom metrics let you scale on things your users actually feel (request throughput, active sessions, processing rates) rather than internal resource saturation.
-
-## Overview
 We need an aggregated API server (adapter) that serves endpoints like `/apis/custom.metrics.k8s.io/v1beta1/` so the Kubernetes API server can delegate metric queries via an `APIService` registration:
 
 ```yaml
@@ -547,14 +581,15 @@ pod/hpa-demo-699586ccf5-tpcgh   1/1     Running   0          3m43s
 Why? The API doesn’t define “utilization” semantics for arbitrary metrics—you decide what absolute target makes sense (e.g., 1 request/sec per pod). Keep targets stable and tweak iteratively.
 
 # HPA with External Metrics
-## Overview
+
 We use a dummy Python script to simulate an external monitoring service exposing a metric `kafka_queue_length` via a REST API.
-There is a ConfigMap to hold the metric value so you can adjust it with `kubectl edit`.
-The interesting thing here is, external metrics are not collected per pod like the custom metrics, 
-for example we could collect the queue length from Kafka, not the microservice consuming events from Kafka.
+The interesting thing here is, external metrics are not collected per pod like the custom metrics, for example we could collect the queue length from Kafka, not the microservice consuming events from Kafka.
+In most cases you will have a tag to tell which microservice you want to scale. e.g., there could be many Kafka topics consumed by many microservices, 
+and there should be tag in the metric like `topic_lag` to indicate which microservice is consuming this topic, if there are too many events piled up in that queue with high latency,
+you expect HPA to pick up the microservice by that tag to scale up and reduce the latency.
 
 ## Deploy a fake monitoring system
-Deploy the Python fake monitoring system.
+Deploy the Python fake monitoring system to simulate a Kafka metric source provider (maybe kafka-exporter, or DynaTrace, whatever tool has the metrics).
 ```bash
 kubectl apply -f deploy_external_metrics_collect.yaml
 > kubectl get all
@@ -653,7 +688,7 @@ Now you can verify the external metric is registered to the api-server and expos
 }
 ```
 
-# Implement HPA with external metrics
+## Test HPA with external metrics
 
 We will update the HPA to target 2 as in the code snippet below. If the queue length is 2 then HPA will stabilize the number of pods.
 ```yaml
