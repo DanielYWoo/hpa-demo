@@ -1,0 +1,14 @@
+prometheus:
+  url: http://prometheus-server.prometheus.svc
+  port: 80
+
+rules:
+  default: true
+  external:
+    - seriesQuery: '{__name__="kafka_queue_length",queue_name!=""}'
+      resources:
+        namespaced: false
+      name:
+        matches: "kafka_queue_length"
+        as: "kafka_queue_length"
+      metricsQuery: 'avg(kafka_queue_length{queue_name!="",<<.LabelMatchers>>}) by (queue_name)'

@@ -1,0 +1,97 @@
+# fake-kafka-monitor-deployment.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fake-kafka-config
+data:
+  queue_length: "10"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-kafka-monitor
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fake-kafka-monitor
+  template:
+    metadata:
+      labels:
+        app: fake-kafka-monitor
+    spec:
+      containers:
+        - name: fake-kafka-monitor
+          image: python:3.11-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              cat > /tmp/fake-kafka-monitor.py << 'EOF'
+              from http.server import HTTPServer, BaseHTTPRequestHandler
+              
+              class MetricsHandler(BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      # Read value from config file dynamically for each request
+                      with open('/config/queue_length', 'r') as f:
+                          queue_value = f.read().strip()
+              
+                      # Generate Prometheus format manually
+                      metrics_output = "# HELP kafka_queue_length Fake Kafka queue length\n"
+                      metrics_output += "# TYPE kafka_queue_length gauge\n"
+                      metrics_output += f'kafka_queue_length{{queue_name="hpa-demo"}} {queue_value}\n'
+                      metrics_output += 'kafka_queue_length{queue_name="foo-svc"} 1\n'
+                      metrics_output += 'kafka_queue_length{queue_name="bar-svc"} 2\n'
+              
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                      self.end_headers()
+                      self.wfile.write(metrics_output.encode('utf-8'))
+              
+                  def log_message(self, format, *args):
+                      print(f"Request: {format % args}")
+              
+              if __name__ == '__main__':
+                  server = HTTPServer(('0.0.0.0', 8080), MetricsHandler)
+                  print("Fake Kafka monitor started on :8080/metrics")
+                  server.serve_forever()
+              EOF
+              python /tmp/fake-kafka-monitor.py
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: fake-kafka-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-kafka-monitor-service
+spec:
+  selector:
+    app: fake-kafka-monitor
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fake-kafka-monitor-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: monitor.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fake-kafka-monitor-service
+                port:
+                  number: 8080

@@ -1,0 +1,24 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-demo
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hpa-demo
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: kafka_queue_length
+          selector:
+            matchLabels:
+              queue_name: hpa-demo
+        target:
+          # desiredReplicas = ceil( currentReplicas * ( currentMetricValue / targetValue ) ) when scaling up,
+          type: Value
+          value: 2
